@@ -1,0 +1,1637 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Core models for Document Chat System
+
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Billing information
+  stripeCustomerId   String?
+  subscriptionStatus SubscriptionStatus @default(TRIALING)
+  planType           String?
+  billingEmail       String?
+
+  // Relations
+  users           User[]
+  documents       Document[]
+  folders         Folder[]
+  subscriptions   Subscription[]
+  usageRecords    UsageRecord[]
+  usageMigrations UsageMigration[]
+  apiKeys         ApiKey[]
+  profiles        Profile[]
+
+  // Account Deletion
+  accountDeletions AccountDeletion[]
+
+  // Notifications
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+
+  // Organization Settings
+  organizationSettings OrganizationSettings[]
+
+  // A/B Testing
+  abTestResults ABTestResult[]
+
+  // AI Analytics
+  aiMetrics           AIMetric[]
+  aiRoutingConfigs    AIRoutingConfig[]
+  aiCostOptimizations AICostOptimization[]
+  aiAlerts            AIAlert[]
+
+  // Background Processing
+  batchProcessingJobs BatchProcessing[]
+
+  // Audit and Security Relations
+  auditLogs          AuditLog[]
+  auditLogRetentions AuditLogRetention[]
+  auditLogExports    AuditLogExport[]
+  securityIncidents  SecurityIncident[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  clerkId        String    @unique
+  email          String    @unique
+  firstName      String?
+  lastName       String?
+  imageUrl       String?
+  role           UserRole  @default(MEMBER)
+  organizationId String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  // User preferences
+  timezone     String?
+  emailOptIn   Boolean   @default(true)
+  lastActiveAt DateTime?
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdFolders Folder[]     @relation("FolderCreatedBy")
+  activities     Activity[]
+  documents      Document[]
+  apiKeys        ApiKey[]
+
+  // Notifications
+  notifications            Notification[]
+  notificationUserStatuses NotificationUserStatus[]
+  notificationPreferences  NotificationPreference[]
+
+  // A/B Testing
+  abTestResults ABTestResult[]
+
+  // Background Processing
+  batchProcessingJobs BatchProcessing[]
+
+  // Audit and Security Relations
+  auditLogs       AuditLog[]       @relation("AuditLogUser")
+  auditLogExports AuditLogExport[] @relation("AuditLogExportUser")
+
+  // Profile Relations
+  createdProfiles Profile[] @relation("ProfileCreatedBy")
+  updatedProfiles Profile[] @relation("ProfileUpdatedBy")
+
+  @@map("users")
+}
+
+model Folder {
+  id             String    @id @default(cuid())
+  organizationId String
+  createdById    String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  // Folder Information
+  name        String
+  description String?
+  color       String? // Hex color code for folder
+  icon        String? // Icon identifier
+
+  // Hierarchy
+  parentId String?
+  path     String[] // Full path from root for efficient queries
+  level    Int      @default(0) // Depth level for hierarchy
+
+  // System Folders (cannot be deleted)
+  isSystemFolder Boolean @default(false)
+  folderType     String? // DOCUMENTS, TEMPLATES, OTHER
+
+  // Permissions and Settings
+  isPublic Boolean @default(false)
+  metadata Json? // Additional folder metadata
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("FolderCreatedBy", fields: [createdById], references: [id])
+  parent       Folder?      @relation("FolderHierarchy", fields: [parentId], references: [id])
+  children     Folder[]     @relation("FolderHierarchy")
+  documents    Document[]
+
+  @@index([organizationId, parentId])
+  @@index([organizationId, isSystemFolder])
+  @@index([path])
+  @@map("folders")
+}
+
+model Document {
+  id             String  @id @default(cuid())
+  organizationId String
+  uploadedById   String
+  folderId       String?
+
+  // File information
+  name         String // User-editable filename
+  size         Int // File size in bytes
+  mimeType     String
+  filePath     String // Storage path in Supabase
+  uploadDate   DateTime // ISO string
+  lastModified DateTime // ISO string
+
+  // Document classification (unified enums)
+  documentType           DocumentType           @default(OTHER)
+  securityClassification SecurityClassification @default(PUBLIC)
+  workflowStatus         WorkflowStatus         @default(DRAFT)
+
+  // Extracted content
+  extractedText String?
+  summary       String?
+
+  // User metadata
+  description String?
+  tags        String[]
+  isEditable  Boolean  @default(true)
+
+  // JSON fields (consolidated data replacing 14+ models)
+  content    Json // DocumentContent - sections, tables, images
+  embeddings Json // DocumentEmbeddings - vectors
+  entities   Json // DocumentEntities - extracted entities
+  sharing    Json // DocumentSharing - permissions, shares, comments
+  revisions  Json // DocumentRevisions - version control
+  processing Json // DocumentProcessing - current status + events
+  analysis   Json // DocumentAnalysis - contract, compliance
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User         @relation(fields: [uploadedById], references: [id])
+  folder       Folder?      @relation(fields: [folderId], references: [id])
+
+  @@index([organizationId, uploadedById])
+  @@index([organizationId, folderId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, documentType, createdAt])
+  @@index([organizationId, workflowStatus])
+  @@index([uploadedById, createdAt])
+  @@index([documentType])
+  @@index([workflowStatus])
+  @@map("documents")
+}
+
+model Activity {
+  id           String       @id @default(cuid())
+  userId       String
+  activityType ActivityType
+  title        String
+  description  String?
+  metadata     Json? // Additional activity-specific data
+  createdAt    DateTime     @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("activities")
+}
+
+model Subscription {
+  id             String   @id @default(cuid())
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Stripe Information
+  stripeSubscriptionId String @unique
+  stripePriceId        String
+  stripeCustomerId     String
+
+  // Subscription Details
+  planType           String // STARTER, PROFESSIONAL, AGENCY, ENTERPRISE
+  status             SubscriptionStatus
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean            @default(false)
+  canceledAt         DateTime?
+  trialStart         DateTime?
+  trialEnd           DateTime?
+
+  // Billing
+  amount   Int // Amount in cents
+  currency String @default("usd")
+  interval String // month, year
+
+  // Features and Limits
+  features Json // Array of feature flags
+  limits   Json // Usage limits based on plan
+
+  // Metadata
+  metadata Json? // Additional Stripe metadata
+
+  // Relations
+  organization              Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usageRecords              UsageRecord[]
+  oldSubscriptionMigrations UsageMigration[] @relation("OldSubscriptionMigrations")
+  newSubscriptionMigrations UsageMigration[] @relation("NewSubscriptionMigrations")
+
+  @@map("subscriptions")
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  organizationId String
+  subscriptionId String?
+  createdAt      DateTime @default(now())
+
+  // Usage Tracking
+  usageType UsageType
+  quantity  Int       @default(1)
+
+  // Time Period
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Resource Identification
+  resourceId   String? // ID of the resource being tracked
+  resourceType String? // Type of resource (ai_query, document, etc.)
+
+  // Metadata
+  metadata Json? // Additional usage context
+
+  // Billing Integration
+  reportedToStripe    Boolean @default(false)
+  stripeUsageRecordId String?
+
+  // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, usageType, periodStart])
+  @@index([organizationId, createdAt])
+  @@map("usage_records")
+}
+
+model BillingEvent {
+  id             String   @id @default(cuid())
+  organizationId String?
+  createdAt      DateTime @default(now())
+
+  // Event Information
+  eventType     String // webhook event type
+  stripeEventId String    @unique
+  processed     Boolean   @default(false)
+  processedAt   DateTime?
+
+  // Event Data
+  data Json // Raw Stripe event data
+
+  // Error Handling
+  processingError String?
+  retryCount      Int     @default(0)
+
+  @@map("billing_events")
+}
+
+model ApiKey {
+  id             String   @id @default(cuid())
+  keyId          String   @unique // 16-character hex identifier
+  organizationId String
+  userId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Key Information
+  name      String // Human-readable name for the key
+  hashedKey String // SHA-256 hash of the actual key
+  scopes    String[] // Array of scope strings
+
+  // Status and Expiration
+  isActive   Boolean   @default(true)
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+
+  // Usage Statistics
+  usageCount Int @default(0)
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyId])
+  @@map("api_keys")
+}
+
+model UsageEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  // Event Information
+  type         String // Type of usage event
+  resourceId   String? // ID of resource accessed
+  resourceType String? // Type of resource
+
+  // Context
+  ipAddress String?
+  userAgent String?
+  endpoint  String? // API endpoint called
+  method    String? // HTTP method
+
+  // Metadata
+  metadata Json? // Additional event-specific data
+
+  // Performance
+  responseTime Int? // Response time in milliseconds
+  statusCode   Int? // HTTP status code
+
+  @@index([organizationId, type, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("usage_events")
+}
+
+// Enums
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum DocumentType {
+  // Interface-aligned values (maps to interface documentType field)
+  PROPOSAL // Government proposal documents - aligns with interface 'proposal'
+  CONTRACT // Contract and solicitation documents - aligns with interface 'contract'
+  CERTIFICATION // Certification and capability statements - aligns with interface 'certification'
+  COMPLIANCE // Compliance and regulatory documents - aligns with interface 'compliance'
+  TEMPLATE // Reusable templates - aligns with interface 'template'
+  OTHER // Other document types - aligns with interface 'other'
+
+  // Additional values
+  SOLICITATION // Solicitation documents
+  AMENDMENT // Amendment documents
+  CAPABILITY_STATEMENT // Capability statement documents
+  PAST_PERFORMANCE // Past performance documents
+}
+
+enum ProcessingStatus {
+  PENDING // File uploaded, not yet processed (was UPLOADED) - aligns with interface 'pending'
+  QUEUED // Queued for processing - aligns with interface 'queued'
+  PROCESSING // Being processed for text extraction - aligns with interface 'processing'
+  COMPLETED // Successfully processed and ready for chat (was PROCESSED) - aligns with interface 'completed'
+  FAILED // Processing failed - aligns with interface 'failed'
+}
+
+enum SecurityClassification {
+  PUBLIC // Public documents (no restrictions) - aligns with interface 'public'
+  INTERNAL // Internal company documents - aligns with interface 'internal'
+  CONFIDENTIAL // Confidential documents (restricted access) - aligns with interface 'confidential'
+  SECRET // Secret documents (highest security) - aligns with interface 'secret'
+}
+
+enum WorkflowStatus {
+  DRAFT // Document in draft state - aligns with interface 'draft'
+  REVIEW // Under review - aligns with interface 'review'
+  APPROVED // Approved for use - aligns with interface 'approved'
+  REJECTED // Rejected and needs changes - aligns with interface 'rejected'
+  ARCHIVED // Archived documents - aligns with interface 'archived'
+}
+
+enum ActivityType {
+  DOCUMENT_UPLOADED
+  EMAIL_SENT
+  MEETING_SCHEDULED
+  NOTE_ADDED
+  STATUS_CHANGED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  PAUSED
+}
+
+enum UsageType {
+  AI_QUERY
+  DOCUMENT_PROCESSING
+  API_CALL
+  EXPORT
+  USER_SEAT
+  AI_REQUESTS
+}
+
+// Notification Models
+
+model Notification {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String? // null for organization-wide notifications
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  // Notification Content
+  type      NotificationType
+  category  NotificationCategory
+  title     String
+  message   String
+  actionUrl String? // URL to navigate to when clicked
+
+  // Status and Priority
+  priority NotificationPriority @default(MEDIUM)
+
+  // Metadata
+  metadata  Json? // Additional context data
+  expiresAt DateTime? // For temporary notifications
+
+  // Relations
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userStatuses NotificationUserStatus[]
+
+  @@index([organizationId, userId])
+  @@index([organizationId, createdAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model NotificationUserStatus {
+  id             String   @id @default(cuid())
+  notificationId String
+  userId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // User-specific status
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+
+  // Relations
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, isRead, isDeleted])
+  @@index([notificationId])
+  @@map("notification_user_statuses")
+}
+
+model NotificationPreference {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Preference Settings
+  category NotificationCategory
+
+  // Delivery Methods
+  inApp Boolean @default(true)
+  email Boolean @default(true)
+  sms   Boolean @default(false)
+  push  Boolean @default(true)
+
+  // Frequency Settings
+  frequency  NotificationFrequency @default(REAL_TIME)
+  digestTime String? // Time for digest delivery (e.g., "09:00")
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@index([userId, organizationId])
+  @@map("notification_preferences")
+}
+
+// Account Deletion Models
+
+model AccountDeletion {
+  id             String  @id @default(cuid())
+  organizationId String
+  userId         String? // Can be null if user already deleted from Clerk
+
+  // Deletion details
+  status       DeletionStatus @default(REQUESTED)
+  deletionType DeletionType   @default(USER_INITIATED)
+  reason       String? // Optional reason for deletion
+
+  // Timing
+  requestedAt           DateTime  @default(now())
+  softDeletedAt         DateTime? // When soft delete completed
+  hardDeletedAt         DateTime? // When hard delete completed
+  scheduledHardDeleteAt DateTime? // When hard delete is scheduled
+
+  // Requester information
+  requestedBy      String // User ID who requested deletion
+  requestedByEmail String? // Email of requester (for audit)
+
+  // Compliance and audit
+  retainedData Json? // What data was retained for compliance
+  deletedData  Json? // What data was deleted
+  auditTrail   AccountDeletionAudit[]
+
+  // External service cleanup
+  clerkUserDeleted        Boolean @default(false)
+  stripeCustomerProcessed Boolean @default(false)
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("account_deletions")
+}
+
+model AccountDeletionAudit {
+  id                String @id @default(cuid())
+  accountDeletionId String
+
+  // Audit details
+  action      DeletionAction
+  performedAt DateTime       @default(now())
+  performedBy String? // User/system that performed action
+
+  // Data details
+  dataType        String // Type of data affected (users, profiles, etc.)
+  recordsAffected Int? // Number of records affected
+  details         Json? // Additional details about the action
+
+  // Status and errors
+  success      Boolean @default(true)
+  errorMessage String?
+
+  // Relations
+  accountDeletion AccountDeletion @relation(fields: [accountDeletionId], references: [id], onDelete: Cascade)
+
+  @@map("account_deletion_audits")
+}
+
+// Enums for Account Deletion
+
+enum DeletionStatus {
+  REQUESTED // Initial request submitted
+  SOFT_DELETED // Immediate soft delete completed
+  SCHEDULED // Hard deletion scheduled
+  HARD_DELETED // Permanent deletion completed
+  FAILED // Deletion failed
+  CANCELLED // Deletion request cancelled
+}
+
+enum DeletionType {
+  USER_INITIATED // User requested deletion
+  ADMIN_INITIATED // Admin requested deletion
+  COMPLIANCE_REQUIRED // Legal/compliance requirement
+  SECURITY_INCIDENT // Security-related deletion
+  ACCOUNT_CLOSURE // Business closure
+}
+
+enum DeletionAction {
+  REQUEST_CREATED
+  SUBSCRIPTIONS_CANCELLED
+  STRIPE_CUSTOMER_PROCESSED
+  CLERK_USER_DELETED
+  PII_ANONYMIZED
+  DATA_SOFT_DELETED
+  DATA_HARD_DELETED
+  AUDIT_CREATED
+  DELETION_COMPLETED
+  DELETION_FAILED
+  DELETION_CANCELLED
+}
+
+// Notification Enums
+
+enum NotificationType {
+  SYSTEM // System updates and maintenance
+  UPDATE // Product updates and features
+  WARNING // Important warnings
+  SUCCESS // Success confirmations
+  BILLING // Billing and subscription updates
+  TEAM // Team and collaboration updates
+}
+
+enum NotificationCategory {
+  SYSTEM_UPDATE // System maintenance/updates
+  BILLING // Billing notifications
+  TEAM // Team collaboration
+  GENERAL // General notifications
+}
+
+enum NotificationPriority {
+  LOW // Can be safely ignored
+  MEDIUM // Standard priority
+  HIGH // Should be addressed soon
+  URGENT // Requires immediate attention
+}
+
+enum NotificationFrequency {
+  REAL_TIME // Immediate delivery
+  HOURLY // Hourly digest
+  DAILY // Daily digest
+  WEEKLY // Weekly digest
+  DISABLED // No notifications
+}
+
+model UsageMigration {
+  id                String   @id @default(cuid())
+  organizationId    String
+  oldSubscriptionId String
+  newSubscriptionId String
+  createdAt         DateTime @default(now())
+
+  // Migration Details
+  recordsMigrated   Int
+  periodStart       DateTime
+  periodEnd         DateTime
+  preservedOriginal Boolean  @default(false)
+  migratedBy        String // User ID who performed the migration
+
+  // Metadata
+  metadata Json? // Additional migration context
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  oldSubscription Subscription @relation("OldSubscriptionMigrations", fields: [oldSubscriptionId], references: [id], onDelete: Cascade)
+  newSubscription Subscription @relation("NewSubscriptionMigrations", fields: [newSubscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([oldSubscriptionId])
+  @@index([newSubscriptionId])
+  @@map("usage_migrations")
+}
+
+model PricingPlan {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Plan Information
+  planType    String @unique // STARTER, PROFESSIONAL, AGENCY, ENTERPRISE
+  displayName String // Human-readable name
+  description String // Plan description
+
+  // Pricing
+  monthlyPrice Int // Price in cents
+  yearlyPrice  Int? // Discounted yearly price in cents
+  currency     String @default("usd")
+
+  // Stripe Integration
+  stripeMonthlyPriceId String? // Stripe price ID for monthly billing
+  stripeYearlyPriceId  String? // Stripe price ID for yearly billing
+
+  // Features and Limits
+  features Json // Array of feature flags and descriptions
+  limits   Json // Usage limits (users, API calls, etc.)
+
+  // Display Settings
+  isActive     Boolean @default(true) // Whether to show in pricing table
+  isPopular    Boolean @default(false) // Show as "Most Popular"
+  displayOrder Int     @default(0) // Order in pricing table
+
+  // Metadata
+  metadata Json? // Additional plan metadata
+
+  @@index([planType])
+  @@index([isActive, displayOrder])
+  @@map("pricing_plans")
+}
+
+model OrganizationSettings {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String // AI_FEATURES, AB_TEST, etc.
+  settings       Json // Flexible settings storage
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String? // User ID who created
+  updatedBy      String? // User ID who last updated
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, category])
+  @@index([organizationId])
+  @@index([category])
+  @@map("organization_settings")
+}
+
+// A/B Testing Models
+
+model ABTest {
+  id             String    @id @default(cuid())
+  name           String
+  description    String
+  enabled        Boolean   @default(true)
+  startDate      DateTime  @default(now())
+  endDate        DateTime?
+  targetAudience Json? // Organization IDs, user IDs, percentage
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  createdBy      String // User ID who created the test
+
+  // Relations
+  variants ABTestVariant[]
+  results  ABTestResult[]
+
+  @@index([enabled, startDate])
+  @@index([endDate])
+  @@map("ab_tests")
+}
+
+model ABTestVariant {
+  id          String   @id @default(cuid())
+  testId      String
+  name        String
+  description String
+  provider    String // 'vercel' or 'traditional'
+  weight      Int // 0-100 percentage
+  createdAt   DateTime @default(now())
+
+  // Relations
+  test    ABTest         @relation(fields: [testId], references: [id], onDelete: Cascade)
+  results ABTestResult[]
+
+  @@index([testId])
+  @@map("ab_test_variants")
+}
+
+model ABTestResult {
+  id             String   @id @default(cuid())
+  testId         String
+  variantId      String
+  userId         String
+  organizationId String
+  startTime      DateTime
+  endTime        DateTime
+  latency        Int // Milliseconds
+  tokensUsed     Int
+  cost           Float // Actual cost in dollars
+  success        Boolean
+  error          String?
+  userFeedback   Json? // Satisfaction rating, comments
+  createdAt      DateTime @default(now())
+
+  // Relations
+  test         ABTest        @relation(fields: [testId], references: [id], onDelete: Cascade)
+  variant      ABTestVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([testId, variantId])
+  @@index([userId, organizationId])
+  @@index([startTime])
+  @@map("ab_test_results")
+}
+
+// AI Analytics Models
+
+model AIMetric {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  // Request Information
+  requestId String @unique
+  provider  String // openai, anthropic, google, azure
+  model     String // gpt-4, claude-3, etc.
+  operation String // chat, completion, embedding, etc.
+
+  // Performance Metrics
+  latency      Int // Response time in milliseconds
+  tokensInput  Int? // Input tokens used
+  tokensOutput Int? // Output tokens used
+  totalTokens  Int? // Total tokens used
+
+  // Cost Information
+  cost          Float // Cost in dollars
+  estimatedCost Float? // Pre-execution cost estimate
+
+  // Routing Information
+  routingDecision String? // fast, balanced, powerful
+  routingReason   String? // Why this provider was chosen
+  fallbackUsed    Boolean @default(false)
+  fallbackReason  String? // Why fallback was triggered
+
+  // Result Information
+  success    Boolean
+  statusCode Int?
+  error      String?
+  errorType  String? // rate_limit, api_error, etc.
+
+  // Quality Metrics
+  responseQuality Float? // 0-1 quality score
+  userFeedback    Json? // User satisfaction data
+
+  // Metadata
+  metadata Json? // Additional context data
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, provider, createdAt])
+  @@index([organizationId, operation, createdAt])
+  @@index([provider, model, createdAt])
+  @@index([provider, model, success, createdAt])
+  @@index([requestId])
+  @@map("ai_metrics")
+}
+
+model AIProviderStatus {
+  id        String   @id @default(cuid())
+  provider  String   @unique
+  updatedAt DateTime @updatedAt
+
+  // Health Status
+  isHealthy           Boolean  @default(true)
+  lastHealthCheck     DateTime @default(now())
+  consecutiveFailures Int      @default(0)
+
+  // Performance Metrics (24h rolling window)
+  avgLatency  Float? // Average latency in ms
+  p95Latency  Float? // 95th percentile latency
+  successRate Float? // Success percentage (0-100)
+  errorRate   Float? // Error percentage (0-100)
+
+  // Usage Metrics (24h rolling window)
+  requestCount Int   @default(0)
+  totalCost    Float @default(0)
+  totalTokens  Int   @default(0)
+
+  // Circuit Breaker
+  circuitState    String    @default("CLOSED") // CLOSED, OPEN, HALF_OPEN
+  circuitOpenedAt DateTime?
+  nextRetryAt     DateTime?
+
+  // Configuration
+  isEnabled      Boolean @default(true)
+  priority       Int     @default(0) // Higher = preferred
+  costMultiplier Float   @default(1.0) // Cost adjustment factor
+
+  @@index([provider])
+  @@index([isHealthy, priority])
+  @@map("ai_provider_status")
+}
+
+model AIRoutingConfig {
+  id             String   @id @default(cuid())
+  organizationId String? // null for system-wide config
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String // User ID who created/updated
+
+  // Routing Strategy
+  strategy String @default("BALANCED") // COST_OPTIMIZED, PERFORMANCE, BALANCED, CUSTOM
+
+  // Provider Preferences
+  preferredProviders String[] // Ordered list of preferred providers
+  blockedProviders   String[] // Providers to never use
+
+  // Cost Controls
+  maxCostPerRequest  Float? // Maximum cost per request
+  monthlyCostLimit   Float? // Monthly spending limit
+  costAlertThreshold Float? // Send alert when approaching limit
+
+  // Performance Requirements
+  maxLatency      Int? // Maximum acceptable latency in ms
+  minQualityScore Float? // Minimum quality score (0-1)
+
+  // Fallback Configuration
+  enableFallback      Boolean @default(true)
+  maxFallbackAttempts Int     @default(2)
+  fallbackDelay       Int     @default(100) // ms between fallback attempts
+
+  // A/B Testing
+  abTestEnabled    Boolean @default(false)
+  abTestPercentage Int? // Percentage of requests to A/B test
+
+  // Metadata
+  metadata Json? // Additional configuration
+
+  // Relations
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId])
+  @@index([organizationId])
+  @@map("ai_routing_configs")
+}
+
+model AICostOptimization {
+  id             String   @id @default(cuid())
+  organizationId String
+  createdAt      DateTime @default(now())
+
+  // Period Information
+  periodStart DateTime
+  periodEnd   DateTime
+  periodType  String // DAILY, WEEKLY, MONTHLY
+
+  // Cost Analysis
+  totalCost     Float
+  projectedCost Float // Projected cost based on usage
+  targetCost    Float? // Cost target/budget
+  costSavings   Float // Amount saved through optimization
+
+  // Usage Breakdown
+  providerCosts  Json // Cost breakdown by provider
+  modelCosts     Json // Cost breakdown by model
+  operationCosts Json // Cost breakdown by operation type
+
+  // Optimization Metrics
+  cacheHitRate      Float // Percentage of cached responses
+  routingEfficiency Float // How well routing decisions minimize cost
+  tokenEfficiency   Float // Average tokens per request
+
+  // Recommendations
+  recommendations      Json[] // Array of optimization recommendations
+  appliedOptimizations Json[] // Optimizations that were applied
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, periodStart])
+  @@index([organizationId, periodType, periodStart])
+  @@map("ai_cost_optimizations")
+}
+
+model AIAlert {
+  id             String    @id @default(cuid())
+  organizationId String? // null for system-wide alerts
+  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+
+  // Alert Information
+  alertType String // COST_THRESHOLD, PERFORMANCE_DEGRADATION, PROVIDER_DOWN, etc.
+  severity  String // LOW, MEDIUM, HIGH, CRITICAL
+  title     String
+  message   String
+
+  // Alert Context
+  provider    String? // Affected provider
+  metric      String? // Affected metric
+  threshold   Float? // Threshold that was exceeded
+  actualValue Float? // Actual value that triggered alert
+
+  // Actions
+  actionRequired Boolean @default(false)
+  actionTaken    String? // What action was taken
+  actionBy       String? // User ID who took action
+
+  // Metadata
+  metadata Json? // Additional alert context
+
+  // Relations
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, alertType, severity])
+  @@index([severity, acknowledgedAt])
+  @@map("ai_alerts")
+}
+
+// Batch Processing for background jobs
+model BatchProcessing {
+  id             String   @id
+  organizationId String
+  userId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Processing Status
+  status             String @default("queued") // queued, processing, completed, failed
+  totalDocuments     Int
+  processedDocuments Int    @default(0)
+  failedDocuments    Int    @default(0)
+
+  // Timing
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  // Error Handling
+  error String?
+
+  // Metadata
+  metadata Json? // Stores options, results, etc.
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([userId, createdAt])
+  @@map("batch_processing")
+}
+
+// =============================================
+// AUDIT AND COMPLIANCE LOGGING SYSTEM
+// =============================================
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  // Event Classification
+  eventType AuditEventType
+  category  AuditCategory
+  severity  AuditSeverity  @default(INFO)
+  source    String // Application component or module
+
+  // Event Details
+  action     String // Specific action performed (CREATE, READ, UPDATE, DELETE, LOGIN, etc.)
+  resource   String? // Resource type affected (USER, DOCUMENT, etc.)
+  resourceId String? // Specific resource ID
+  entityType String? // Entity type for structured logging
+  entityId   String? // Entity ID for tracking
+
+  // Session and Request Context
+  sessionId  String? // User session identifier
+  requestId  String? // Request correlation ID
+  ipAddress  String? // Client IP address
+  userAgent  String? // Client user agent
+  endpoint   String? // API endpoint or page accessed
+  httpMethod String? // HTTP method (GET, POST, etc.)
+  statusCode Int? // HTTP response status code
+
+  // Event Content and Context
+  message     String // Human-readable audit message
+  description String? // Detailed description of the event
+  oldValues   Json? // Previous state (for updates/deletes)
+  newValues   Json? // New state (for creates/updates)
+  metadata    Json? // Additional context data
+
+  // Compliance and Retention
+  retentionPeriod String   @default("7_YEARS") // Retention period requirement
+  complianceFlag  Boolean  @default(false) // Mark for compliance-specific events
+  tags            String[] // Tags for categorization and search
+
+  // Performance and Debugging
+  duration     Int? // Operation duration in milliseconds
+  errorMessage String? // Error details if applicable
+  stackTrace   String? @db.Text // Full stack trace for errors
+
+  // Data Integrity and Security
+  checksum  String? // Checksum for tamper detection
+  encrypted Boolean @default(false) // Whether sensitive data is encrypted
+
+  // Geographic and Regulatory
+  dataLocation String? // Where data is processed/stored
+  jurisdiction String? // Legal jurisdiction for compliance
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User?        @relation("AuditLogUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  // Related audit events for correlation
+  parentLogId String? // Parent audit event for grouped operations
+  parentLog   AuditLog?  @relation("AuditLogHierarchy", fields: [parentLogId], references: [id])
+  childLogs   AuditLog[] @relation("AuditLogHierarchy")
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, eventType, createdAt])
+  @@index([organizationId, category, createdAt])
+  @@index([userId, createdAt])
+  @@index([eventType, severity, createdAt])
+  @@index([resource, resourceId])
+  @@index([sessionId, createdAt])
+  @@index([requestId])
+  @@index([entityType, entityId])
+  @@index([complianceFlag, createdAt])
+  @@index([retentionPeriod, createdAt])
+  @@index([checksum])
+  @@map("audit_logs")
+}
+
+model AuditLogRetention {
+  id             String   @id @default(cuid())
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Retention Policy
+  policyName    String
+  category      AuditCategory
+  retentionDays Int // Number of days to retain logs
+  archiveAfter  Int? // Days before archiving to cold storage
+
+  // Compliance Requirements
+  complianceFramework String[] // SOC2, FedRAMP, NIST, etc.
+  legalBasis          String? // Legal requirement for retention
+
+  // Policy Settings
+  isActive       Boolean @default(true)
+  autoDelete     Boolean @default(false) // Auto-delete after retention period
+  archiveEnabled Boolean @default(true) // Enable archiving to cold storage
+
+  // Metadata
+  description String?
+  createdBy   String // User who created the policy
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, category])
+  @@index([organizationId, isActive])
+  @@index([category, retentionDays])
+  @@map("audit_log_retention")
+}
+
+model AuditLogExport {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  // Export Parameters
+  startDate  DateTime
+  endDate    DateTime
+  categories AuditCategory[]
+  eventTypes AuditEventType[]
+  format     ExportFormat     @default(JSON)
+
+  // Export Status
+  status          ExportStatus @default(PENDING)
+  progress        Int          @default(0) // 0-100 percentage
+  totalRecords    Int?
+  exportedRecords Int          @default(0)
+
+  // File Information
+  fileName    String?
+  filePath    String? // Storage path in Supabase
+  fileSize    Int? // File size in bytes
+  downloadUrl String? // Signed URL for download
+  expiresAt   DateTime? // When download URL expires
+
+  // Security and Integrity
+  checksum    String? // File checksum for integrity
+  encrypted   Boolean  @default(true)
+  accessedBy  String[] // Users who accessed the export
+  accessCount Int      @default(0)
+
+  // Error Handling
+  errorMessage String?
+  retryCount   Int     @default(0)
+
+  // Compliance
+  purpose    String? // Business purpose for export
+  approvedBy String? // Approval for sensitive data export
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation("AuditLogExportUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([expiresAt])
+  @@map("audit_log_exports")
+}
+
+model SecurityIncident {
+  id             String    @id @default(cuid())
+  organizationId String
+  detectedAt     DateTime  @default(now())
+  reportedAt     DateTime?
+  resolvedAt     DateTime?
+
+  // Incident Classification
+  incidentType SecurityIncidentType
+  severity     SecuritySeverity
+  status       SecurityIncidentStatus @default(DETECTED)
+  confidence   Float                  @default(0.8) // 0.0-1.0 confidence score
+
+  // Incident Details
+  title           String
+  description     String   @db.Text
+  source          String // Detection source (manual, automated, etc.)
+  affectedSystems String[] // Systems impacted
+
+  // Investigation and Response
+  investigatedBy  String[] // User IDs of investigators
+  responseActions Json? // Actions taken to respond
+  rootCause       String?  @db.Text
+  lessons         String?  @db.Text
+
+  // Impact Assessment
+  dataCompromised Boolean  @default(false)
+  usersAffected   Int      @default(0)
+  estimatedCost   Decimal?
+
+  // External Reporting
+  reportedToAuthorities Boolean @default(false)
+  regulatoryReporting   Json? // Details of regulatory reporting
+
+  // Related Audit Logs
+  relatedLogIds String[] // IDs of related audit logs
+
+  // Metadata
+  tags        String[]
+  attachments Json? // Evidence and documentation
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, detectedAt])
+  @@index([organizationId, incidentType, severity])
+  @@index([status, detectedAt])
+  @@index([severity, status])
+  @@map("security_incidents")
+}
+
+// Comprehensive Audit and Security Enums
+
+enum AuditEventType {
+  // =============================================
+  // AUTHENTICATION & AUTHORIZATION
+  // =============================================
+  USER_LOGIN
+  USER_LOGOUT
+  USER_LOGIN_FAILED
+  PASSWORD_CHANGE
+  PASSWORD_RESET
+  MFA_ENABLED
+  MFA_DISABLED
+  MFA_CHALLENGE_FAILED
+  SESSION_EXPIRED
+  SESSION_TERMINATED
+
+  // =============================================
+  // USER & ACCOUNT MANAGEMENT
+  // =============================================
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  USER_ROLE_CHANGED
+  USER_SUSPENDED
+  USER_REACTIVATED
+  USER_INVITED
+  USER_INVITATION_ACCEPTED
+  USER_INVITATION_EXPIRED
+
+  // =============================================
+  // ORGANIZATION MANAGEMENT
+  // =============================================
+  ORGANIZATION_CREATED
+  ORGANIZATION_UPDATED
+  ORGANIZATION_DELETED
+  ORGANIZATION_SETTINGS_CHANGED
+  ORGANIZATION_MEMBER_ADDED
+  ORGANIZATION_MEMBER_REMOVED
+  ORGANIZATION_PLAN_CHANGED
+  ORGANIZATION_SUSPENDED
+  ORGANIZATION_REACTIVATED
+
+  // =============================================
+  // DOCUMENT MANAGEMENT
+  // =============================================
+  DOCUMENT_UPLOADED
+  DOCUMENT_PROCESSED
+  DOCUMENT_PROCESSING_FAILED
+  DOCUMENT_DELETED
+  DOCUMENT_SHARED
+  DOCUMENT_DOWNLOADED
+  DOCUMENT_VECTORIZED
+  DOCUMENT_CHUNK_CREATED
+  DOCUMENT_OCR_PROCESSED
+  DOCUMENT_MOVED_TO_FOLDER
+  DOCUMENT_VERSION_CREATED
+  DOCUMENT_EXPORTED
+
+  // =============================================
+  // AI SERVICES
+  // =============================================
+  AI_REQUEST_INITIATED
+  AI_REQUEST_COMPLETED
+  AI_REQUEST_FAILED
+  AI_PROVIDER_SWITCHED
+  AI_COST_CALCULATED
+  AI_USAGE_TRACKED
+  AI_MODEL_SELECTED
+  AI_FALLBACK_TRIGGERED
+  AI_CIRCUIT_BREAKER_OPENED
+  AI_CIRCUIT_BREAKER_CLOSED
+  AI_RATE_LIMIT_EXCEEDED
+  AI_BUDGET_EXCEEDED
+  AI_OPTIMIZATION_APPLIED
+
+  // =============================================
+  // DOCUMENT CHAT & RAG
+  // =============================================
+  CHAT_SESSION_STARTED
+  CHAT_SESSION_ENDED
+  CHAT_MESSAGE_SENT
+  CHAT_RESPONSE_GENERATED
+  CHAT_CONTEXT_RETRIEVED
+  CHAT_CITATION_GENERATED
+  CHAT_FEEDBACK_PROVIDED
+  CHAT_CONVERSATION_EXPORTED
+  CHAT_HISTORY_CLEARED
+
+  // =============================================
+  // BILLING & SUBSCRIPTIONS
+  // =============================================
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_CANCELLED
+  SUBSCRIPTION_REACTIVATED
+  SUBSCRIPTION_UPGRADED
+  SUBSCRIPTION_DOWNGRADED
+  PAYMENT_PROCESSED
+  PAYMENT_FAILED
+  PAYMENT_REFUNDED
+  INVOICE_GENERATED
+  USAGE_LIMIT_REACHED
+  USAGE_LIMIT_EXCEEDED
+  BILLING_WEBHOOK_RECEIVED
+
+  // =============================================
+  // NOTIFICATIONS
+  // =============================================
+  NOTIFICATION_CREATED
+  NOTIFICATION_SENT
+  NOTIFICATION_READ
+  NOTIFICATION_DISMISSED
+  NOTIFICATION_PREFERENCES_UPDATED
+  NOTIFICATION_BATCH_SENT
+  NOTIFICATION_FAILED
+  NOTIFICATION_EXPIRED
+
+  // =============================================
+  // API USAGE
+  // =============================================
+  API_KEY_CREATED
+  API_KEY_USED
+  API_KEY_REVOKED
+  API_KEY_EXPIRED
+  API_REQUEST_MADE
+  API_REQUEST_FAILED
+  API_RATE_LIMIT_HIT
+  API_ENDPOINT_ACCESSED
+  API_AUTHENTICATION_FAILED
+
+  // =============================================
+  // SECURITY & COMPLIANCE
+  // =============================================
+  SECURITY_ALERT_TRIGGERED
+  SECURITY_INCIDENT_CREATED
+  SECURITY_INCIDENT_RESOLVED
+  UNAUTHORIZED_ACCESS_ATTEMPTED
+  PRIVILEGE_ESCALATION_DETECTED
+  SUSPICIOUS_ACTIVITY_DETECTED
+  COMPLIANCE_VIOLATION_DETECTED
+  COMPLIANCE_REPORT_GENERATED
+  AUDIT_LOG_ACCESSED
+  AUDIT_LOG_EXPORTED
+  DATA_BREACH_DETECTED
+  VULNERABILITY_DETECTED
+  SECURITY_SCAN_COMPLETED
+  SECURITY_VIOLATION
+
+  // =============================================
+  // SYSTEM & ADMINISTRATION
+  // =============================================
+  SYSTEM_STARTUP
+  SYSTEM_SHUTDOWN
+  SYSTEM_MAINTENANCE_STARTED
+  SYSTEM_MAINTENANCE_COMPLETED
+  CONFIGURATION_CHANGED
+  FEATURE_FLAG_UPDATED
+  CACHE_CLEARED
+  CACHE_WARMED
+  BACKUP_CREATED
+  BACKUP_RESTORED
+  DATABASE_MIGRATION_STARTED
+  DATABASE_MIGRATION_COMPLETED
+}
+
+enum AuditCategory {
+  AUTHENTICATION
+  AUTHORIZATION
+  DATA_ACCESS
+  DATA_MODIFICATION
+  USER_MANAGEMENT
+  ORGANIZATION_MANAGEMENT
+  PROFILE_MANAGEMENT
+  DOCUMENT_MANAGEMENT
+  AI_SERVICES
+  BILLING
+  NOTIFICATIONS
+  API_USAGE
+  SECURITY
+  COMPLIANCE
+  AUDIT_MANAGEMENT
+  SYSTEM_ADMINISTRATION
+  ERROR
+  BUSINESS_LOGIC
+}
+
+enum AuditSeverity {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+
+enum ExportFormat {
+  JSON
+  CSV
+  XML
+  PDF
+}
+
+enum ExportStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum SecurityIncidentType {
+  UNAUTHORIZED_ACCESS
+  DATA_BREACH
+  MALWARE
+  PHISHING
+  INSIDER_THREAT
+  SYSTEM_COMPROMISE
+  DENIAL_OF_SERVICE
+  PRIVILEGE_ESCALATION
+  DATA_LOSS
+  COMPLIANCE_VIOLATION
+  SUSPICIOUS_ACTIVITY
+  CONFIGURATION_ERROR
+  VULNERABILITY_EXPLOIT
+}
+
+enum SecuritySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SecurityIncidentStatus {
+  DETECTED
+  INVESTIGATING
+  CONTAINED
+  RESOLVED
+  FALSE_POSITIVE
+  ESCALATED
+}
+
+// =============================================
+// PROFILE MODEL AND ENUMS
+// =============================================
+
+model Profile {
+  id             String    @id @default(cuid())
+  organizationId String
+  createdById    String
+  updatedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  // Company Information
+  companyName String
+  dbaName     String?
+  uei         String?
+  duns        String?
+  cageCode    String?
+
+  // Business Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  zipCode      String?
+  country      String  @default("USA")
+
+  // Contact Information
+  primaryContactName  String?
+  primaryContactEmail String?
+  primaryContactPhone String?
+  website             String?
+
+  // Profile Images
+  logoUrl                String?
+  bannerUrl              String?
+  contactProfileImageUrl String?
+
+  // Business Classification
+  businessType    String?
+  yearEstablished Int?
+  employeeCount   String?
+  annualRevenue   String?
+
+  // NAICS Codes
+  primaryNaics   String?
+  secondaryNaics String[]
+
+  // Certifications
+  certifications Json? // Store as JSON for flexibility
+
+  // Capabilities and Experience
+  coreCompetencies  String[]
+  competencyDetails Json? // Store detailed competency information with skill levels
+  pastPerformance   Json? // Store structured past performance data
+  securityClearance String?
+
+  // Brand Voice and Communication
+  brandVoice BrandVoice? // Brand voice preference using enum
+  brandTone  BrandTone? // Communication tone using enum
+
+  // Geographic and Organization Level Preferences
+  geographicPreferences Json? // Preferred geographic markets and regions
+  organizationLevels    OrganizationLevel[] // Preferred organization levels using enum
+
+  // System fields
+  profileCompleteness Int       @default(0) // Percentage 0-100
+  samGovSyncedAt      DateTime?
+  samGovData          Json?
+
+  // Profile vectorization for AI matching
+  profileEmbeddings Json? // Profile embedding vectors for intelligent matching
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("ProfileCreatedBy", fields: [createdById], references: [id])
+  updatedBy    User?        @relation("ProfileUpdatedBy", fields: [updatedById], references: [id])
+
+  @@map("profiles")
+}
+
+enum BrandVoice {
+  PROFESSIONAL
+  FRIENDLY
+  TECHNICAL
+  AUTHORITATIVE
+  CREATIVE
+  COLLABORATIVE
+}
+
+enum BrandTone {
+  FORMAL
+  CONVERSATIONAL
+  DIRECT
+  COLLABORATIVE
+  CONSULTATIVE
+  RESULTS_DRIVEN
+}
+
+enum OrganizationLevel {
+  FEDERAL
+  STATE
+  LOCAL
+  MUNICIPAL
+  COUNTY
+  ENTERPRISE
+  DEPARTMENT
+}
